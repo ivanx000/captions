@@ -9,6 +9,7 @@ Usage:
 
 import argparse
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -41,10 +42,24 @@ def format_timestamp(seconds: float) -> str:
 # Audio extraction
 # ---------------------------------------------------------------------------
 
+def _find_ffmpeg() -> str:
+    """Return the ffmpeg executable path, checking PATH and known install locations."""
+    if found := shutil.which("ffmpeg"):
+        return found
+    # winget installs ffmpeg here but doesn't always refresh the current shell's PATH
+    winget_bin = Path.home() / "AppData/Local/Microsoft/WinGet/Packages"
+    for exe in winget_bin.glob("Gyan.FFmpeg_*/ffmpeg-*/bin/ffmpeg.exe"):
+        return str(exe)
+    sys.exit(
+        "Error: ffmpeg not found. Install it from https://ffmpeg.org/download.html "
+        "and make sure it's on your system PATH."
+    )
+
+
 def extract_audio(video_path: str, wav_path: str) -> None:
     """Extract audio from video to a 16kHz mono WAV file using ffmpeg."""
     cmd = [
-        "ffmpeg",
+        _find_ffmpeg(),
         "-i", video_path,
         "-ar", "16000",   # 16kHz sample rate (Whisper's expected rate)
         "-ac", "1",        # mono
@@ -53,13 +68,7 @@ def extract_audio(video_path: str, wav_path: str) -> None:
         wav_path,
         "-y",              # overwrite without asking
     ]
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True)
-    except FileNotFoundError:
-        sys.exit(
-            "Error: ffmpeg not found. Install it from https://ffmpeg.org/download.html "
-            "and make sure it's on your system PATH."
-        )
+    result = subprocess.run(cmd, capture_output=True, text=True)
 
     if result.returncode != 0:
         sys.exit(f"Error: ffmpeg failed to extract audio:\n{result.stderr.strip()}")
@@ -241,6 +250,13 @@ Examples:
         )
 
     output_path = video_path.with_suffix(".srt")
+
+    # --- Ensure ffmpeg is on PATH for this process (and all subprocesses,
+    #     including Whisper's internal audio.py calls) ---
+    ffmpeg_exe = _find_ffmpeg()
+    ffmpeg_dir = str(Path(ffmpeg_exe).parent)
+    if ffmpeg_dir not in os.environ.get("PATH", ""):
+        os.environ["PATH"] = ffmpeg_dir + os.pathsep + os.environ.get("PATH", "")
 
     # --- Detect device ---
     try:
