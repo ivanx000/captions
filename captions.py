@@ -90,8 +90,8 @@ def chunk_sentence(result: dict) -> list:
 
 def chunk_phrase(result: dict) -> list:
     """
-    Group words into short phrases (~3-7 words).
-    Breaks on natural pauses (gap > 0.4s between words) or when hitting 7 words.
+    Group words into short phrases (up to 3 words).
+    Breaks on natural pauses (gap > 0.4s between words) or when hitting 3 words.
     Falls back to segment-level chunks if word timestamps are unavailable.
     """
     # Flatten all words across segments
@@ -132,7 +132,7 @@ def chunk_phrase(result: dict) -> list:
 
         gap_to_next = (next_word["start"] - word["end"]) if next_word else None
         natural_pause = gap_to_next is not None and gap_to_next > 0.4
-        max_words_reached = len(chunk_words) >= 7
+        max_words_reached = len(chunk_words) >= 3
         is_last = next_word is None
 
         if natural_pause or max_words_reached or is_last:
@@ -195,6 +195,7 @@ def write_srt(subtitles: list, output_path: str) -> None:
     """Write a list of (start, end, text) tuples to a .srt file."""
     with open(output_path, "w", encoding="utf-8") as f:
         for index, (start, end, text) in enumerate(subtitles, start=1):
+            text = text.replace(".", "")
             f.write(f"{index}\n")
             f.write(f"{format_timestamp(start)} --> {format_timestamp(end)}\n")
             f.write(f"{text}\n")
@@ -221,8 +222,8 @@ Examples:
     parser.add_argument(
         "--mode",
         choices=["sentence", "phrase", "word"],
-        default="sentence",
-        help="Subtitle chunking mode (default: sentence)",
+        default="phrase",
+        help="Subtitle chunking mode (default: phrase)",
     )
     parser.add_argument(
         "--model",
