@@ -196,6 +196,7 @@ def write_srt(subtitles: list, output_path: str) -> None:
     with open(output_path, "w", encoding="utf-8") as f:
         for index, (start, end, text) in enumerate(subtitles, start=1):
             text = text.replace(".", "")
+            text = text[0].upper() + text[1:].lower() if text else text
             f.write(f"{index}\n")
             f.write(f"{format_timestamp(start)} --> {format_timestamp(end)}\n")
             f.write(f"{text}\n")
