@@ -26,6 +26,20 @@ MODEL_NOTE = (
 
 
 # ---------------------------------------------------------------------------
+# ASS style constants (mirrors Vegas "Subtitles" preset on 1080x1920)
+# ---------------------------------------------------------------------------
+
+ASS_PLAY_RES_X   = 1080
+ASS_PLAY_RES_Y   = 1920
+ASS_FONT         = "Arial"
+ASS_FONT_SIZE    = 72        # adjust if text appears too big/small in Vegas
+ASS_TEXT_COLOR   = "&H00FFFFFF"   # white
+ASS_OUTLINE_COLOR = "&H00000000"  # black
+ASS_OUTLINE_SIZE = 4         # pixels; maps to Vegas outline width 10.000
+ASS_MARGIN_V     = 384       # pixels from bottom (Vegas Y=0.20 on 1920px frame)
+
+
+# ---------------------------------------------------------------------------
 # Timestamp formatting
 # ---------------------------------------------------------------------------
 
@@ -36,6 +50,15 @@ def format_timestamp(seconds: float) -> str:
     m = int(seconds) // 60 % 60
     h = int(seconds) // 3600
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+
+def format_ass_timestamp(seconds: float) -> str:
+    """Convert seconds to ASS timestamp format H:MM:SS.cc (centiseconds)."""
+    cs = round((seconds % 1) * 100)
+    s = int(seconds) % 60
+    m = int(seconds) // 60 % 60
+    h = int(seconds) // 3600
+    return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
 
 
 # ---------------------------------------------------------------------------
@@ -251,8 +274,50 @@ def chunk_word(result: dict) -> list:
 
 
 # ---------------------------------------------------------------------------
-# SRT output
+# SRT / ASS output
 # ---------------------------------------------------------------------------
+
+def write_ass(subtitles: list, output_path: str) -> None:
+    """Write subtitles to an .ass file with styling matching the Vegas Subtitles preset."""
+    raw_speakers = [s[3] for s in subtitles if s[3] is not None]
+    unique_speakers = sorted(set(raw_speakers))
+    speaker_map = {sp: chr(ord("A") + i) for i, sp in enumerate(unique_speakers)}
+    use_labels = bool(unique_speakers)
+
+    header = (
+        "[Script Info]\n"
+        "ScriptType: v4.00+\n"
+        f"PlayResX: {ASS_PLAY_RES_X}\n"
+        f"PlayResY: {ASS_PLAY_RES_Y}\n"
+        "ScaledBorderAndShadow: yes\n"
+        "\n"
+        "[V4+ Styles]\n"
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, "
+        "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, "
+        "ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
+        "Alignment, MarginL, MarginR, MarginV, Encoding\n"
+        f"Style: Default,{ASS_FONT},{ASS_FONT_SIZE},"
+        f"{ASS_TEXT_COLOR},&H000000FF,{ASS_OUTLINE_COLOR},&H00000000,"
+        f"0,0,0,0,100,100,0,0,1,{ASS_OUTLINE_SIZE},0,"
+        f"2,0,0,{ASS_MARGIN_V},1\n"
+        "\n"
+        "[Events]\n"
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+    )
+
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write(header)
+        for start, end, text, speaker in subtitles:
+            text = text.replace(".", "")
+            text = text[0].upper() + text[1:].lower() if text else text
+            if use_labels:
+                label = speaker_map.get(speaker, "?")
+                text = f"{label}: {text}"
+            f.write(
+                f"Dialogue: 0,{format_ass_timestamp(start)},{format_ass_timestamp(end)},"
+                f"Default,,0,0,0,,{text}\n"
+            )
+
 
 def write_srt(subtitles: list, output_path: str) -> None:
     """Write a list of (start, end, text, speaker) tuples to a .srt file."""
@@ -327,6 +392,12 @@ Examples:
         default=None,
         help="Number of speakers (optional hint for diarization accuracy)",
     )
+    parser.add_argument(
+        "--format",
+        choices=["srt", "ass"],
+        default="ass",
+        help="Output subtitle format (default: ass)",
+    )
     args = parser.parse_args()
 
     # --- Validate input ---
@@ -341,7 +412,7 @@ Examples:
             f"Supported: {', '.join(sorted(SUPPORTED_EXTENSIONS))}"
         )
 
-    output_path = video_path.with_suffix(".srt")
+    output_path = video_path.with_suffix(f".{args.format}")
 
     # --- Ensure ffmpeg is on PATH for this process (and all subprocesses,
     #     including Whisper's internal audio.py calls) ---
@@ -418,9 +489,12 @@ Examples:
         if not subtitles:
             sys.exit("Error: No speech detected in the audio.")
 
-        # --- Write .srt ---
-        print("Writing .srt...")
-        write_srt(subtitles, str(output_path))
+        # --- Write output ---
+        print(f"Writing .{args.format}...")
+        if args.format == "ass":
+            write_ass(subtitles, str(output_path))
+        else:
+            write_srt(subtitles, str(output_path))
 
         print(f"\nDone! {len(subtitles)} subtitle events saved to: {output_path}")
 
