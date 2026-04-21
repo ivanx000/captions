@@ -75,6 +75,53 @@ def extract_audio(video_path: str, wav_path: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Speaker diarization
+# ---------------------------------------------------------------------------
+
+def diarize_audio(audio_path: str, hf_token: str, num_speakers: int = None) -> list:
+    """Run pyannote speaker diarization; returns [(start, end, speaker_label), ...]."""
+    try:
+        from pyannote.audio import Pipeline
+    except ImportError:
+        sys.exit(
+            "Error: pyannote.audio is not installed. "
+            "Run: pip install pyannote.audio"
+        )
+    try:
+        import torch
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    except ImportError:
+        device = None
+
+    print("Loading diarization pipeline...")
+    pipeline = Pipeline.from_pretrained(
+        "pyannote/speaker-diarization-3.1",
+        use_auth_token=hf_token,
+    )
+    if device is not None:
+        pipeline = pipeline.to(device)
+
+    print("Running speaker diarization...")
+    kwargs = {}
+    if num_speakers:
+        kwargs["num_speakers"] = num_speakers
+    annotation = pipeline(audio_path, **kwargs)
+
+    return [
+        (turn.start, turn.end, speaker)
+        for turn, _, speaker in annotation.itertracks(yield_label=True)
+    ]
+
+
+def get_speaker_at(diarization: list, time: float) -> str:
+    """Return the speaker label active at `time`, or None if no segment covers it."""
+    for start, end, speaker in diarization:
+        if start <= time <= end:
+            return speaker
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Chunking modes
 # ---------------------------------------------------------------------------
 
@@ -84,15 +131,16 @@ def chunk_sentence(result: dict) -> list:
     for seg in result["segments"]:
         text = seg["text"].strip()
         if text:
-            subtitles.append((seg["start"], seg["end"], text))
+            subtitles.append((seg["start"], seg["end"], text, None))
     return subtitles
 
 
-def chunk_phrase(result: dict) -> list:
+def chunk_phrase(result: dict, diarization: list = None) -> list:
     """
     Group words into short phrases (up to 3 words).
-    Breaks on natural pauses (gap > 0.4s between words) or when hitting 3 words.
-    Falls back to segment-level chunks if word timestamps are unavailable.
+    Breaks on natural pauses (>0.4s), sentence-ending punctuation, speaker changes,
+    or when hitting 3 words. Falls back to segment-level chunks if word timestamps
+    are unavailable.
     """
     # Flatten all words across segments
     all_words = []
@@ -117,14 +165,27 @@ def chunk_phrase(result: dict) -> list:
     subtitles = []
     chunk_words = []
     chunk_start = None
+    chunk_speaker = None
 
     for i, word in enumerate(all_words):
         word_text = word["word"].strip()
         if not word_text:
             continue
 
+        word_start = word["start"]
+        word_speaker = get_speaker_at(diarization, word_start) if diarization else None
+
+        # Force a break when the speaker changes mid-stream
+        if chunk_words and diarization and word_speaker != chunk_speaker:
+            text = " ".join(chunk_words)
+            subtitles.append((chunk_start, all_words[i - 1]["end"], text, chunk_speaker))
+            chunk_words = []
+            chunk_start = None
+            chunk_speaker = None
+
         if chunk_start is None:
-            chunk_start = word["start"]
+            chunk_start = word_start
+            chunk_speaker = word_speaker
 
         chunk_words.append(word_text)
 
@@ -133,13 +194,15 @@ def chunk_phrase(result: dict) -> list:
         gap_to_next = (next_word["start"] - word["end"]) if next_word else None
         natural_pause = gap_to_next is not None and gap_to_next > 0.4
         max_words_reached = len(chunk_words) >= 3
+        sentence_end = word_text.rstrip().endswith((".", "?", "!"))
         is_last = next_word is None
 
-        if natural_pause or max_words_reached or is_last:
+        if natural_pause or max_words_reached or sentence_end or is_last:
             text = " ".join(chunk_words)
-            subtitles.append((chunk_start, word["end"], text))
+            subtitles.append((chunk_start, word["end"], text, chunk_speaker))
             chunk_words = []
             chunk_start = None
+            chunk_speaker = None
 
     return subtitles
 
@@ -182,7 +245,7 @@ def chunk_word(result: dict) -> list:
         # Enforce minimum 100ms duration
         end = max(end, start + 0.1)
 
-        subtitles.append((start, end, text))
+        subtitles.append((start, end, text, None))
 
     return subtitles
 
@@ -192,11 +255,20 @@ def chunk_word(result: dict) -> list:
 # ---------------------------------------------------------------------------
 
 def write_srt(subtitles: list, output_path: str) -> None:
-    """Write a list of (start, end, text) tuples to a .srt file."""
+    """Write a list of (start, end, text, speaker) tuples to a .srt file."""
+    # Build a short letter label for each unique speaker (SPEAKER_00 -> A, etc.)
+    raw_speakers = [s[3] for s in subtitles if s[3] is not None]
+    unique_speakers = sorted(set(raw_speakers))
+    speaker_map = {sp: chr(ord("A") + i) for i, sp in enumerate(unique_speakers)}
+    use_labels = bool(unique_speakers)
+
     with open(output_path, "w", encoding="utf-8") as f:
-        for index, (start, end, text) in enumerate(subtitles, start=1):
+        for index, (start, end, text, speaker) in enumerate(subtitles, start=1):
             text = text.replace(".", "")
             text = text[0].upper() + text[1:].lower() if text else text
+            if use_labels:
+                label = speaker_map.get(speaker, "?")
+                text = f"{label}: {text}"
             f.write(f"{index}\n")
             f.write(f"{format_timestamp(start)} --> {format_timestamp(end)}\n")
             f.write(f"{text}\n")
@@ -217,6 +289,8 @@ Examples:
   python captions.py video.mp4 --mode phrase
   python captions.py video.mp4 --mode word --model medium
   python captions.py video.mp4 --language ja
+  python captions.py video.mp4 --diarize --hf-token hf_xxx
+  python captions.py video.mp4 --diarize --hf-token hf_xxx --speakers 2
         """,
     )
     parser.add_argument("video_path", help="Path to the input video file")
@@ -236,6 +310,22 @@ Examples:
         "--language",
         default=None,
         help="Language code, e.g. 'en', 'ja', 'fr' (default: auto-detect)",
+    )
+    parser.add_argument(
+        "--diarize",
+        action="store_true",
+        help="Enable speaker diarization (requires pyannote.audio and a HuggingFace token)",
+    )
+    parser.add_argument(
+        "--hf-token",
+        default=None,
+        help="HuggingFace token for pyannote models (or set HF_TOKEN env var)",
+    )
+    parser.add_argument(
+        "--speakers",
+        type=int,
+        default=None,
+        help="Number of speakers (optional hint for diarization accuracy)",
     )
     args = parser.parse_args()
 
@@ -280,6 +370,18 @@ Examples:
         print("Extracting audio...")
         extract_audio(str(video_path), tmp_wav)
 
+        # --- Speaker diarization (optional) ---
+        diarization = None
+        if args.diarize:
+            hf_token = args.hf_token or os.environ.get("HF_TOKEN")
+            if not hf_token:
+                sys.exit(
+                    "Error: --diarize requires a HuggingFace token. "
+                    "Pass --hf-token <token> or set the HF_TOKEN environment variable.\n"
+                    "Get a free token at https://huggingface.co/settings/tokens"
+                )
+            diarization = diarize_audio(tmp_wav, hf_token, args.speakers)
+
         # --- Load Whisper model ---
         print(f"Loading Whisper model ({args.model})...")
         try:
@@ -309,7 +411,7 @@ Examples:
         if args.mode == "sentence":
             subtitles = chunk_sentence(result)
         elif args.mode == "phrase":
-            subtitles = chunk_phrase(result)
+            subtitles = chunk_phrase(result, diarization)
         else:  # word
             subtitles = chunk_word(result)
 

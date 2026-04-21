@@ -7,3 +7,7 @@ numpy>=1.24.0
 # The line below installs the CPU-only build. For GPU support, replace it
 # with the appropriate command from https://pytorch.org/get-started/locally/
 torch>=2.0.0
+
+# Optional — speaker diarization (requires a free HuggingFace account/token)
+# pip install pyannote.audio
+# pyannote.audio>=3.1
