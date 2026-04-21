@@ -1,8 +1,8 @@
 # captions.py
 
-Generate `.srt` subtitle files from video files using [OpenAI Whisper](https://github.com/openai/whisper) — runs locally, no API key needed.
+Generate subtitle files from video using [OpenAI Whisper](https://github.com/openai/whisper) — runs locally, no API key needed.
 
-Designed for use with **Sony Vegas Pro 18**, which imports `.srt` files and converts each subtitle line into an individually editable text event on the timeline.
+Outputs `.ass` by default (with position and outline styling pre-applied) or `.srt` via `--format srt`. Designed for use with **Sony Vegas Pro** on 1080×1920 portrait video.
 
 ---
 
@@ -12,11 +12,9 @@ Designed for use with **Sony Vegas Pro 18**, which imports `.srt` files and conv
 Download from [python.org](https://www.python.org/downloads/).
 
 ### 2. ffmpeg (system install — required)
-The Python `ffmpeg-python` package is just bindings. You **must** also have the ffmpeg binary on your system PATH.
-
-- **Windows**: Download from [ffmpeg.org](https://ffmpeg.org/download.html), extract, and add the `bin/` folder to your PATH. Or use winget: `winget install ffmpeg`
+- **Windows**: `winget install ffmpeg` or download from [ffmpeg.org](https://ffmpeg.org/download.html) and add the `bin/` folder to your PATH
 - **macOS**: `brew install ffmpeg`
-- **Linux**: `sudo apt install ffmpeg` (Debian/Ubuntu) or equivalent
+- **Linux**: `sudo apt install ffmpeg`
 
 Verify: `ffmpeg -version`
 
@@ -55,19 +53,23 @@ The script auto-detects CUDA and prints which device it's using.
 ## Usage
 
 ```
-python captions.py <video_path> [--mode sentence|phrase|word] [--model tiny|base|small|medium|large] [--language CODE]
+python captions.py <video_path> [--mode sentence|phrase|word]
+                                [--model tiny|base|small|medium|large]
+                                [--language CODE]
+                                [--format srt|ass]
+                                [--diarize --hf-token TOKEN [--speakers N]]
 ```
 
-The output `.srt` file is saved in the **same directory as the input video**, with the same base name.
+The output file is saved in the **same directory as the input video**, with the same base name.
 
 ### Examples
 
 ```bash
-# Basic — sentence mode, small model, auto-detect language
+# Basic — phrase mode, small model, .ass output
 python captions.py my_video.mp4
 
-# Shorter caption chunks (~3-7 words), good for fast speech
-python captions.py my_video.mp4 --mode phrase
+# Output plain .srt instead
+python captions.py my_video.mp4 --format srt
 
 # Word-by-word (karaoke / TikTok style)
 python captions.py my_video.mp4 --mode word
@@ -77,6 +79,12 @@ python captions.py my_video.mp4 --model medium
 
 # Non-English video
 python captions.py my_video.mp4 --language ja
+
+# Speaker diarization (labels each subtitle A:, B:, etc.)
+python captions.py my_video.mp4 --diarize --hf-token hf_xxx
+
+# Diarization with a known number of speakers
+python captions.py my_video.mp4 --diarize --hf-token hf_xxx --speakers 2
 
 # Combine options
 python captions.py my_video.mp4 --mode phrase --model large --language fr
@@ -88,9 +96,9 @@ python captions.py my_video.mp4 --mode phrase --model large --language fr
 
 | Mode | Description | Best for |
 |------|-------------|----------|
-| `sentence` | One subtitle per Whisper segment (default) | Dialogue, narration |
-| `phrase` | ~3-7 words per line, breaks at natural pauses | Fast speech, dense content |
-| `word` | Each word is its own subtitle event (≥100ms) | Karaoke, TikTok-style captions |
+| `phrase` | Up to 3 words per line, breaks at natural pauses **(default)** | Fast speech, TikTok/Shorts style |
+| `sentence` | One subtitle per Whisper segment | Dialogue, narration |
+| `word` | Each word is its own subtitle event (≥100ms) | Karaoke, word-by-word captions |
 
 ---
 
@@ -114,28 +122,62 @@ Models are downloaded automatically on first use and cached in `~/.cache/whisper
 
 ---
 
-## Output
+## Output formats
 
-Standard `.srt` format with comma-separated milliseconds (required by the spec and by Vegas):
+### .ass (default)
+Advanced SubStation Alpha format with styling pre-applied — Arial font, white text, black outline, centered near the bottom. Matches the Vegas Pro Subtitles preset for 1080×1920.
+
+To adjust the style, edit the constants near the top of `captions.py`:
+
+```python
+ASS_FONT_SIZE    = 72     # increase/decrease text size
+ASS_OUTLINE_SIZE = 4      # outline thickness in pixels
+ASS_MARGIN_V     = 384    # pixels from the bottom of the frame
+```
+
+### .srt
+Plain subtitle format with no styling. Use `--format srt` to get this instead.
 
 ```
 1
 00:00:01,000 --> 00:00:03,500
-First subtitle line here
+First subtitle line
 
 2
 00:00:03,500 --> 00:00:06,000
-Second subtitle line here
+Second subtitle line
 ```
 
 ---
 
-## Importing into Sony Vegas Pro 18
+## Importing into Sony Vegas Pro
 
+### .ass (recommended)
 1. Open your project in Vegas Pro
-2. Go to **File > Import > Subtitles**  
-   *(or drag the `.srt` file onto the timeline)*
-3. Each subtitle line becomes an individual text event — fully editable
+2. Drag the `.ass` file onto the timeline
+3. Vegas auto-generates the subtitle track with position and outline already applied — no manual styling needed per event
+
+### .srt
+1. Open your project in Vegas Pro
+2. Drag the `.srt` file onto the timeline
+3. Vegas auto-generates the subtitle track — style each event manually as needed
+
+---
+
+## Speaker diarization
+
+Diarization identifies who is speaking and prefixes each subtitle with a letter label (`A:`, `B:`, etc.).
+
+**Requirements:**
+- `pip install pyannote.audio`
+- A free [HuggingFace token](https://huggingface.co/settings/tokens)
+- Accept the model terms at [pyannote/speaker-diarization-3.1](https://huggingface.co/pyannote/speaker-diarization-3.1)
+
+```bash
+python captions.py my_video.mp4 --diarize --hf-token hf_xxx
+# or set the token as an env var to avoid typing it each time:
+# HF_TOKEN=hf_xxx python captions.py my_video.mp4 --diarize
+```
 
 ---
 
@@ -148,3 +190,5 @@ Second subtitle line here
 **Poor transcription accuracy** — Try a larger model (`--model medium` or `--model large`), or specify the language explicitly (`--language en`).
 
 **Word timestamps unavailable in `word` mode** — Falls back to sentence mode automatically with a warning. This is rare but can occur with very short or silent audio.
+
+**`pyannote.audio is not installed`** — Run `pip install pyannote.audio` to enable diarization.
