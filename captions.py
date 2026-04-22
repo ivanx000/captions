@@ -217,7 +217,7 @@ def chunk_phrase(result: dict, diarization: list = None) -> list:
 
         gap_to_next = (next_word["start"] - word["end"]) if next_word else None
         natural_pause = gap_to_next is not None and gap_to_next > 0.4
-        max_words_reached = len(chunk_words) >= 3
+        max_words_reached = len(chunk_words) >= 4
         sentence_end = word_text.rstrip().endswith((".", "?", "!"))
         is_last = next_word is None
 
@@ -309,8 +309,8 @@ def write_ass(subtitles: list, output_path: str) -> None:
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(header)
         for start, end, text, speaker in subtitles:
-            text = text.replace(".", "")
-            text = text[0].upper() + text[1:].lower() if text else text
+            text = text.rstrip(".")
+            text = text[0].upper() + text[1:] if text else text
             text = re.sub(r'\bi\b', 'I', text)
             if use_labels:
                 label = speaker_map.get(speaker, "?")
@@ -331,8 +331,8 @@ def write_srt(subtitles: list, output_path: str) -> None:
 
     with open(output_path, "w", encoding="utf-8") as f:
         for index, (start, end, text, speaker) in enumerate(subtitles, start=1):
-            text = text.replace(".", "")
-            text = text[0].upper() + text[1:].lower() if text else text
+            text = text.rstrip(".")
+            text = text[0].upper() + text[1:] if text else text
             text = re.sub(r'\bi\b', 'I', text)
             if use_labels:
                 label = speaker_map.get(speaker, "?")
@@ -400,6 +400,12 @@ Examples:
         choices=["srt", "ass"],
         default="ass",
         help="Output subtitle format (default: ass)",
+    )
+    parser.add_argument(
+        "--offset",
+        type=float,
+        default=0.0,
+        help="Shift all timestamps by this many seconds (e.g. -0.15 to fix Whisper lag)",
     )
     args = parser.parse_args()
 
@@ -491,6 +497,13 @@ Examples:
 
         if not subtitles:
             sys.exit("Error: No speech detected in the audio.")
+
+        # --- Apply timing offset ---
+        if args.offset:
+            subtitles = [
+                (max(0.0, start + args.offset), max(0.0, end + args.offset), text, speaker)
+                for start, end, text, speaker in subtitles
+            ]
 
         # --- Write output ---
         print(f"Writing .{args.format}...")
