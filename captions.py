@@ -9,6 +9,7 @@ Usage:
 
 import argparse
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -310,6 +311,7 @@ def write_ass(subtitles: list, output_path: str) -> None:
         for start, end, text, speaker in subtitles:
             text = text.replace(".", "")
             text = text[0].upper() + text[1:].lower() if text else text
+            text = re.sub(r'\bi\b', 'I', text)
             if use_labels:
                 label = speaker_map.get(speaker, "?")
                 text = f"{label}: {text}"
@@ -331,6 +333,7 @@ def write_srt(subtitles: list, output_path: str) -> None:
         for index, (start, end, text, speaker) in enumerate(subtitles, start=1):
             text = text.replace(".", "")
             text = text[0].upper() + text[1:].lower() if text else text
+            text = re.sub(r'\bi\b', 'I', text)
             if use_labels:
                 label = speaker_map.get(speaker, "?")
                 text = f"{label}: {text}"
